@@ -32,6 +32,8 @@ import (
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/kubernetes/pkg/util/mount"
+	"k8s.io/kubernetes/pkg/util/resizefs"
 )
 
 const (
@@ -294,6 +296,14 @@ func (d *Driver) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabi
 		},
 	}
 
+	resizeCap := &csi.NodeServiceCapability{
+		Type: &csi.NodeServiceCapability_Rpc{
+			Rpc: &csi.NodeServiceCapability_RPC{
+				Type: csi.NodeServiceCapability_RPC_EXPAND_VOLUME,
+			},
+		},
+	}
+
 	d.log.WithFields(logrus.Fields{
 		"node_capabilities": nscap,
 		"method":            "node_get_capabilities",
@@ -301,6 +311,7 @@ func (d *Driver) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabi
 	return &csi.NodeGetCapabilitiesResponse{
 		Capabilities: []*csi.NodeServiceCapability{
 			nscap,
+			resizeCap,
 		},
 	}, nil
 }
@@ -337,7 +348,21 @@ func (d *Driver) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolume
 	d.log.WithField("method", "node_expand_volume").
 		Info("node expand volume called")
 
-	return nil, status.Error(codes.Unimplemented, "")
+	volumeID := req.GetVolumeId()
+	if len(volumeID) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "Volume ID not provided")
+	}
+
+	r := resizefs.NewResizeFs(&mount.SafeFormatAndMount{
+		Interface: mount.New(""),
+		Exec:      mount.NewOsExec(),
+	})
+	// todo: find device path
+	if _, err := r.Resize(req.GetVolumePath(), req.GetVolumePath()); err != nil {
+		return nil, status.Errorf(codes.Internal, "Could not resize volume %q (%q):  %v", volumeID, req.GetVolumePath(), err)
+	}
+
+	return &csi.NodeExpandVolumeResponse{}, nil
 }
 
 // getDiskSource returns the absolute path of the attached volume for the given

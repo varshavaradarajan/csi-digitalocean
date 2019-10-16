@@ -806,11 +806,30 @@ func (d *Driver) ListSnapshots(ctx context.Context, req *csi.ListSnapshotsReques
 	return listResp, nil
 }
 
+// ControllerExpandVolume is called from the resizer to increase the volume size.
 func (d *Driver) ControllerExpandVolume(ctx context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
-	d.log.WithField("method", "controller_expand_volume").
-		Info("controller expand volume called")
+	volID := req.GetVolumeId()
 
-	return nil, status.Error(codes.Unimplemented, "")
+	if len(volID) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
+	}
+
+	resizeBytes, err := extractStorage(req.GetCapacityRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, err.Error())
+	}
+
+	action, _, err := d.storageActions.Resize(ctx, req.GetVolumeId(), int(resizeBytes), d.region)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "StoragesActions.Resize returned error: %s", err.Error())
+	}
+	if action != nil {
+		if err := d.waitAction(ctx, req.VolumeId, action.ID); err != nil {
+			return nil, err
+		}
+	}
+
+	return &csi.ControllerExpandVolumeResponse{CapacityBytes: req.GetCapacityRange().GetRequiredBytes(), NodeExpansionRequired: true}, nil
 }
 
 // extractStorage extracts the storage size in bytes from the given capacity
